@@ -1,12 +1,21 @@
 import { apiClient } from './axios';
 
-export const uploadFile = async (file: File): Promise<string> => {
-  const formData = new FormData();
-  formData.append('file', file);
 
-  const response = await apiClient.post('/upload', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
+// fileService.ts
+export const uploadFile = async (file: File): Promise<{
+  url: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+}> => {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await apiClient.post("/upload", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
   });
 
-  return response.data.url; // assuming backend returns { url: "..." }
+  console.log("File uploaded successfully:", response.data);
+
+  return response.data;
 };

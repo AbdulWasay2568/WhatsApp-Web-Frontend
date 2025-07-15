@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import { useAuth } from "./Auth";
+import { setupSignaling } from "../services/apis/signaling"; // Adjust the import path as necessary
 
 interface socketContextType {
   socket: Socket | null;
@@ -33,6 +34,7 @@ export const SocketContextProvider: React.FC<{ children: React.ReactNode }> = ({
     newSocket.on("connect", () => {
       console.log("🟢 Unified socket connected");
       setIsConnected(true);
+      
       newSocket.emit("presence:online", userId); // Example channel
     });
 
