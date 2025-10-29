@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { setupSignaling } from "../services/apis/signaling";
 import { useSocket } from "./socketContext";
 import { useAuth } from "./Auth"; // ✅ Make sure this exists and provides userId
@@ -56,6 +56,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [status, setStatus] = useState<CallStatus>("idle");
   const [incomingCall, setIncomingCall] = useState<CallData | null>(null);
   const [peerConnection, setPeerConnection] = useState<RTCPeerConnection | null>(null);
+  const signalingCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!socket) return;
@@ -68,7 +69,29 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     socket.on("call:ended", () => {
       console.log("🔚 Call ended by other user");
+      
+      // Clean up signaling listeners
+      if (signalingCleanupRef.current) {
+        signalingCleanupRef.current();
+        signalingCleanupRef.current = null;
+      }
+
+      // Close peer connection
+      if (peerConnection) {
+        peerConnection.close();
+      }
+
+      // Stop all tracks
+      localStream?.getTracks().forEach((track) => track.stop());
+      remoteStream?.getTracks().forEach((track) => track.stop());
+
+      // Reset all state
+      setCallType(null);
+      setRemoteUser(null);
+      setLocalStream(null);
+      setRemoteStream(null);
       setIncomingCall(null);
+      setPeerConnection(null);
       setStatus("idle");
     });
 
@@ -76,7 +99,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       socket.off("call:incoming");
       socket.off("call:ended");
     };
-  }, [socket]);
+  }, [socket, peerConnection, localStream, remoteStream]);
 
   const startCall = async (calleeId: number, type: "audio" | "video") => {
     if (!userId || !socket) return;
@@ -102,7 +125,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setRemoteStream(remote);
     };
 
-    setupSignaling(socket, pc, setRemoteStream);
+    const cleanup = setupSignaling(socket, pc, setRemoteStream);
+    signalingCleanupRef.current = cleanup;
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -151,7 +175,30 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
-    setupSignaling(socket, pc, setRemoteStream);
+    // ✅ Set the remote description (offer from caller)
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
+    } catch (err) {
+      console.error("❌ Error setting remote description:", err);
+      return;
+    }
+
+    // ✅ Create and send answer
+    try {
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      
+      socket.emit("call:answer", {
+        to: incomingCall.from,
+        answer,
+      });
+    } catch (err) {
+      console.error("❌ Error creating answer:", err);
+      return;
+    }
+
+    const cleanup = setupSignaling(socket, pc, setRemoteStream);
+    signalingCleanupRef.current = cleanup;
   };
 
   const rejectCall = () => {
@@ -165,6 +212,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     console.log("🔚 Call ended");
     if (socket && remoteUser) {
       socket.emit("call:end", { to: remoteUser.id });
+    }
+
+    // ✅ Clean up signaling listeners
+    if (signalingCleanupRef.current) {
+      signalingCleanupRef.current();
+      signalingCleanupRef.current = null;
     }
 
     peerConnection?.close();

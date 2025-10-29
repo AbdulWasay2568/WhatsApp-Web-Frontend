@@ -1,10 +1,18 @@
 import React, { useEffect, useState } from "react";
 import { fetchRecentChats } from "../services/apis/chatService";
 import useSocketEvents from "../hooks/useSocket"; // ✅ your updated hook
+import {fetchAllUsers} from "../services/apis/user.service";
+
 
 interface Props {
   userId: number;
   onSelect: (user: number) => void;
+}
+
+export interface User {
+  id: number;
+  username: string;
+  email: string;
 }
 
 export interface Message {
@@ -18,6 +26,8 @@ export interface Message {
 const ContactList: React.FC<Props> = ({ userId, onSelect }) => {
   const [recentMessages, setRecentMessages] = useState<Message[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<number[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+
 
   useSocketEvents(userId, setOnlineUsers); // ✅ use unified socket
 
@@ -31,7 +41,17 @@ const ContactList: React.FC<Props> = ({ userId, onSelect }) => {
       }
     };
 
+    const fetchAllUserdata = async () => {
+      try {
+        const users = await fetchAllUsers();
+        setAllUsers(users);
+      } catch (error) {
+        console.log("Error fetching all users:", error);
+      }
+    };
+
     fetchRecentMessages();
+    fetchAllUserdata();
   }, [userId]);
 
   return (
@@ -39,16 +59,34 @@ const ContactList: React.FC<Props> = ({ userId, onSelect }) => {
       <h2 className="p-4 font-bold text-lg">Contacts</h2>
       {recentMessages.map((user) => (
         <div
-          key={user.userId}
+          key={user.id}
           className="p-4 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
           onClick={() => onSelect(user.userId)}
         >
           <span>{user.name}</span>
+          <span className="text-gray-500 text-sm">{user.lastMessage}</span>
+          
           {onlineUsers.includes(user.userId) && (
             <span className="text-green-500 text-sm">● Online</span>
           )}
+
         </div>
       ))}
+      
+      <div className="mt-40">
+      <h2 className="p-4 font-bold text-lg">Contacts</h2>
+      {allUsers.map((user) => (
+        <div
+          key={user.id}
+          className="p-4 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
+          onClick={() => onSelect(user.id)}
+        >
+          <span>{user.username}</span>
+          
+        </div>
+      ))}
+    </div>
+
     </div>
   );
 };

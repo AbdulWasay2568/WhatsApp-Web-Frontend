@@ -1,125 +1,47 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useSocket } from "../context/socketContext";
-import { getMessages } from "../services/apis/messageService";
-import { uploadFile } from "../services/apis/fileService";
+import { getMessages, uploadFile } from "../services/apis/messageService";
 import Header from "./Header";
-
-interface RawMessage {
-  id: number;
-  content: string;
-  senderId: number;
-  receiverId: number;
-  read: boolean;
-  status: string;
-  createdAt: string;
-  updatedAt: string;
-  fileUrl: string | null;
-  imageUrl: string | null;
-}
-
-interface ReplyData {
-  id: number;
-  content: string;
-  sender: { id: number; username: string };
-  originalMessageId: number;
-}
-
-interface Message {
-  from: number;
-  to: number;
-  content: string;
-  timestamp: string;
-  status: "sent" | "delivered" | "read";
-  replyTo?: ReplyData;
-  fileUrl?: string | null;
-  imageUrl?: string | null;
-  fileName?: string;
-  fileSize?: number;
-}
+import { useChatSocket } from "../hooks/useChatSocket";
 
 interface Props {
   userId: number;
   selectedUser: number;
 }
 
-const ChatScreen: React.FC<Props> = ({ selectedUser, userId }) => {
-  const { socket } = useSocket();
-  const [messages, setMessages] = useState<Message[]>([]);
+const ChatScreen: React.FC<Props> = ({ userId, selectedUser }) => {
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
   const [input, setInput] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
-  const [isTyping, setIsTyping] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [replyingTo, setReplyingTo] = useState<RawMessage | null>(null);
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const [replyingTo, setReplyingTo] = useState<any>(null);
+
+  const { messages = [], setMessages, isTyping, sendMessageSocket, sendTypingStatus } =
+    useChatSocket(userId, selectedUser);
 
   useEffect(() => {
     const fetchChat = async () => {
       try {
-        const fetched: RawMessage[] = await getMessages(userId, selectedUser);
-        const mapped: Message[] = fetched.map((msg) => ({
-          from: msg.senderId,
-          to: msg.receiverId,
-          content: msg.content,
-          timestamp: msg.createdAt,
-          status: msg.status.toLowerCase() as "sent" | "delivered" | "read",
-          fileUrl: msg.fileUrl,
-          imageUrl: msg.imageUrl,
-        }));
-        setMessages(mapped);
+        const fetched = await getMessages(userId, selectedUser);
+        setMessages(
+          fetched.map((msg: any) => ({
+            from: msg.senderId,
+            to: msg.receiverId,
+            content: msg.content,
+            timestamp: msg.createdAt,
+            status: msg.status.toLowerCase(),
+            fileUrl: msg.fileUrl,
+            imageUrl: msg.imageUrl,
+          }))
+        );
       } catch (err) {
         console.error("Failed to fetch messages:", err);
       }
     };
     fetchChat();
-  }, [selectedUser, userId]);
-
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleIncoming = (msg: Message) => {
-      if (
-        (msg.from === userId && msg.to === selectedUser) ||
-        (msg.to === userId && msg.from === selectedUser)
-      ) {
-        setMessages((prev) => [...prev, msg]);
-      }
-    };
-
-    const handleIncomingReply = (reply: any) => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          from: reply.sender.id,
-          to: reply.originalMessage.receiverId,
-          content: reply.content,
-          timestamp: reply.createdAt,
-          status: reply.status.toLowerCase(),
-          replyTo: {
-            id: reply.originalMessage.id,
-            content: reply.originalMessage.content,
-            sender: reply.sender,
-            originalMessageId: reply.originalMessage.id,
-          },
-          fileUrl: reply.fileUrl,
-          imageUrl: reply.imageUrl,
-        },
-      ]);
-    };
-
-    socket.on("private:message", handleIncoming);
-    socket.on("newReply", handleIncomingReply);
-    socket.on("typing:start", (fromId: number) => fromId === selectedUser && setIsTyping(true));
-    socket.on("typing:stop", (fromId: number) => fromId === selectedUser && setIsTyping(false));
-
-    return () => {
-      socket.off("private:message", handleIncoming);
-      socket.off("newReply", handleIncomingReply);
-      socket.off("typing:start");
-      socket.off("typing:stop");
-    };
-  }, [socket, selectedUser, userId]);
+  }, [userId, selectedUser, setMessages]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
@@ -131,20 +53,18 @@ const ChatScreen: React.FC<Props> = ({ selectedUser, userId }) => {
 
   const sendMessage = async () => {
     if (!input.trim() && !file) return;
-
     setUploading(true);
 
-    let uploadedImageUrl: string | null = null;
-    let uploadedFileUrl: string | null = null;
-    let uploadedFileName: string | null = null;
-    let uploadedFileSize: number | undefined;
-
     try {
+      let uploadedImageUrl: string | null = null;
+      let uploadedFileUrl: string | null = null;
+      let uploadedFileName: string | null = null;
+      let uploadedFileSize: number | undefined;
+
       if (file) {
-        const { url, originalName, mimeType, size } = await uploadFile(file);
-        if (file.type.startsWith("image/")) {
-          uploadedImageUrl = url;
-        } else {
+        const { url, originalName, size } = await uploadFile(file);
+        if (file.type.startsWith("image/")) uploadedImageUrl = url;
+        else {
           uploadedFileUrl = url;
           uploadedFileName = originalName;
           uploadedFileSize = size;
@@ -158,7 +78,7 @@ const ChatScreen: React.FC<Props> = ({ selectedUser, userId }) => {
         imageUrl: uploadedImageUrl,
       };
 
-      socket?.emit("private:message", payload);
+      sendMessageSocket(payload);
 
       setMessages((prev) => [
         ...prev,
@@ -178,7 +98,7 @@ const ChatScreen: React.FC<Props> = ({ selectedUser, userId }) => {
       setInput("");
       setFile(null);
       setPreviewUrl(null);
-      socket?.emit("typing:stop", selectedUser);
+      sendTypingStatus(false);
     } catch (err) {
       console.error("Upload failed:", err);
     } finally {
@@ -186,7 +106,16 @@ const ChatScreen: React.FC<Props> = ({ selectedUser, userId }) => {
     }
   };
 
-  const formatFileSize = (bytes: number): string => {
+  const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInput(e.target.value);
+    sendTypingStatus(e.target.value.length > 0);
+  };
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isTyping]);
+
+  const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     const kb = bytes / 1024;
     if (kb < 1024) return `${kb.toFixed(1)} KB`;
@@ -195,21 +124,9 @@ const ChatScreen: React.FC<Props> = ({ selectedUser, userId }) => {
     return `${(mb / 1024).toFixed(1)} GB`;
   };
 
-  const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setInput(value);
-    socket?.emit(value ? "typing:start" : "typing:stop", selectedUser);
-  };
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isTyping]);
-
   return (
     <div className="w-2/3 h-full flex flex-col">
-      {/* <div className="p-4 border-b font-semibold bg-black-100"></div> */}
       <Header userId={userId} selectedUser={selectedUser} />
-
 
       <div className="flex-1 overflow-y-auto p-4 space-y-2 flex flex-col">
         {messages.map((msg, i) => (
@@ -219,13 +136,6 @@ const ChatScreen: React.FC<Props> = ({ selectedUser, userId }) => {
               msg.from === userId ? "bg-green-100 self-end" : "bg-gray-200 self-start"
             }`}
           >
-            {msg.replyTo && (
-              <div className="text-xs text-gray-500 italic mb-1 border-l-2 pl-2 border-blue-400">
-                {msg.replyTo.sender.username} replied: "
-                {msg.replyTo.content.slice(0, 50)}..."
-              </div>
-            )}
-
             {msg.imageUrl && (
               <img
                 src={msg.imageUrl}
@@ -236,69 +146,42 @@ const ChatScreen: React.FC<Props> = ({ selectedUser, userId }) => {
             )}
 
             {msg.fileUrl && (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1 mb-1">
                 <button
                   onClick={async () => {
-                    try {
-                      const response = await fetch(msg.fileUrl!);
-                      const blob = await response.blob();
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = msg.content || "downloaded-file";
-                      document.body.appendChild(a);
-                      a.click();
-                      a.remove();
-                      URL.revokeObjectURL(url);
-                    } catch (err) {
-                      console.error("Download failed:", err);
-                    }
+                    const response = await fetch(msg.fileUrl!);
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = msg.content || "downloaded-file";
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
                   }}
                   className="text-blue-500 underline text-sm hover:text-blue-700"
                 >
                   ⬇ {msg.content}
                 </button>
-
                 {msg.fileSize && (
-                  <span className="text-xs text-gray-500">
-                    ({formatFileSize(msg.fileSize)})
-                  </span>
+                  <span className="text-xs text-gray-500">({formatFileSize(msg.fileSize)})</span>
                 )}
               </div>
             )}
 
+            <p className="text-sm break-words">{msg.content}</p>
           </div>
         ))}
-
         {isTyping && <div className="text-sm text-gray-500 italic">Typing...</div>}
         <div ref={chatEndRef}></div>
       </div>
 
       <div className="p-4 border-t flex flex-col gap-2">
-        {replyingTo && (
-          <div className="px-4 py-2 bg-gray-100 border-l-4 border-blue-500 mb-2 rounded relative">
-            <p className="text-sm text-gray-600">
-              Replying to: <strong>{replyingTo.content.slice(0, 80)}...</strong>
-            </p>
-            <button
-              onClick={() => setReplyingTo(null)}
-              className="absolute top-1 right-2 text-xs text-gray-500 hover:text-red-500"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
         {previewUrl && (
           <div className="flex items-center justify-between bg-gray-100 p-2 rounded">
             <img src={previewUrl} alt="Preview" className="h-20 object-cover" />
-            <button
-              onClick={() => {
-                setFile(null);
-                setPreviewUrl(null);
-              }}
-              className="text-red-500 text-xs"
-            >
+            <button onClick={() => setPreviewUrl(null)} className="text-red-500 text-xs">
               ✕ Cancel
             </button>
           </div>
@@ -344,11 +227,7 @@ const ChatScreen: React.FC<Props> = ({ selectedUser, userId }) => {
             >
               ✕
             </button>
-            <img
-              src={fullscreenImage}
-              alt="full"
-              className="max-h-[90vh] max-w-[90vw] object-contain"
-            />
+            <img src={fullscreenImage} alt="full" className="max-h-[90vh] max-w-[90vw] object-contain" />
           </div>
         </div>
       )}
